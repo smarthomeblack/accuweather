@@ -9,6 +9,7 @@ from typing import Any
 import aiohttp
 
 from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import DOMAIN, DEFAULT_UPDATE_INTERVAL
@@ -26,6 +27,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
         session: aiohttp.ClientSession,
         location_key: str,
         location_name: str,
+        config_entry: ConfigEntry,
         update_interval: int = DEFAULT_UPDATE_INTERVAL,
     ) -> None:
         """Initialize."""
@@ -38,6 +40,7 @@ class AccuWeatherDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER,
             name=DOMAIN,
             update_interval=timedelta(seconds=update_interval),
+            config_entry=config_entry,
         )
 
     async def _async_update_data(self) -> dict[str, Any]:

@@ -27,7 +27,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     session = async_get_clientsession(hass)
     coordinator = AccuWeatherDataUpdateCoordinator(
-        hass, session, location_key, location_name, update_interval
+        hass, session, location_key, location_name, entry, update_interval
     )
     
     await coordinator.async_config_entry_first_refresh()
