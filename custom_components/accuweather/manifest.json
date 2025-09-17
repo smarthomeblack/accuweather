@@ -11,5 +11,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/smarthomeblack/accuweather/issues",
   "requirements": ["beautifulsoup4"],
-  "version": "2025.9.18"
+  "version": "2025.9.19"
 }

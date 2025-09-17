@@ -13,7 +13,7 @@ def get_device_info(location_key: str, location_name: str) -> DeviceInfo:
         name=f"AccuWeather {location_name}",
         manufacturer="smarthomeblack",
         model="AccuWeather",
-        sw_version="2025.9.18",
+        sw_version="2025.9.19",
         configuration_url=f"https://www.accuweather.com/vi/search-locations?query={location_name}",
         entry_type="service",
     )
