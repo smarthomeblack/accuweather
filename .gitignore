@@ -1,0 +1,53 @@
+# Development/Test files - không cần thiết cho custom component
+get_air.py
+get_all_health.py
+get_daily.py
+get_hourly.py
+get_local.py
+get_weather.py
+run_weather.py
+syntax_check.py
+weather.py
+data.txt
+data1.txt
+
+# Test files
+test_*.py
+parse_accuweather_health.py
+code,py
+
+# Documentation files không cần thiết
+*_GUIDE.md
+ALTERNATIVE_*.md
+RESET_*.md
+UNIT_MIGRATION_GUIDE.md
+TRANSLATION_GUIDE.md
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*~
+
+# Log files
+*.log
+jk.txt
+list*.txt
+
+# Media files
+*.mp4
+*.png
+
+# YAML config files
+bms.yaml
