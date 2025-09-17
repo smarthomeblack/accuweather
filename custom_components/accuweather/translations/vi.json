@@ -38,7 +38,7 @@
           "update_interval": "Khoảng thời gian cập nhật (giây)"
         },
         "data_description": {
-          "update_interval": "Từ {min_interval} đến {max_interval} giây (mặc định: {default_interval} giây)"
+          "update_interval": "Từ 300 đến 3600 giây (mặc định: 600 giây)"
         }
       }
     },
