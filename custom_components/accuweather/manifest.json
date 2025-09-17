@@ -1,0 +1,15 @@
+{
+  "domain": "accuweather",
+  "name": "AccuWeather",
+  "codeowners": [
+      "@smarthomeblack"
+  ],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/smarthomeblack/accuweather",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/smarthomeblack/accuweather/issues",
+  "requirements": ["beautifulsoup4"],
+  "version": "2025.9.18"
+}

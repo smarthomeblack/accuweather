@@ -1,0 +1,70 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "AccuWeather Weather Integration",
+        "description": "Configure AccuWeather weather integration to get weather data for your location. Enter the name of your city or specific location.",
+        "data": {
+          "location": "Location (e.g., New York, USA)"
+        },
+        "data_description": {
+          "location": "Enter city name, district, or specific location"
+        }
+      },
+      "select_location": {
+        "title": "Select Exact Location",
+        "description": "Found matching locations. Please select the exact location from the list below:",
+        "data": {
+          "location_choice": "Choose location"
+        },
+        "data_description": {
+          "location_choice": "Select the location that best matches your area"
+        }
+      },
+      "configure_options": {
+        "title": "Configure Update Options",
+        "description": "Set how often weather data should be updated. Shorter intervals update faster but use more resources.",
+        "data": {
+          "update_interval": "Update Interval (seconds)"
+        },
+        "data_description": {
+          "update_interval": "Choose from 300-3600 seconds (5-60 minutes). Recommended: 900-1800 seconds (15-30 minutes)"
+        }
+      },
+      "update_interval": {
+        "title": "Configure Update Interval",
+        "description": "Choose the time between weather data updates from AccuWeather. Shorter time = faster updates but more resource usage.",
+        "data": {
+          "update_interval": "Update Interval (seconds)"
+        },
+        "data_description": {
+          "update_interval": "From 300 to 3600 seconds (default: 600 seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to AccuWeather. Please check your internet connection.",
+      "invalid_location": "Invalid location or not supported by AccuWeather.",
+      "no_locations_found": "No locations found for the search term. Try a different name.",
+      "timeout": "Timeout connecting to AccuWeather. Please try again later.",
+      "unknown": "Unexpected error occurred. Please try again."
+    },
+    "abort": {
+      "already_configured": "This location is already configured. Cannot add duplicates."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Update AccuWeather Settings",
+        "description": "Change settings for AccuWeather integration. You can adjust the weather data update frequency.",
+        "data": {
+          "update_interval": "Update Interval (seconds)"
+        },
+        "data_description": {
+          "update_interval": "Time between data updates (300-3600 seconds)"
+        }
+      }
+    }
+  }
+}

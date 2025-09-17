@@ -1,0 +1,70 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tích hợp Thời tiết AccuWeather",
+        "description": "Cấu hình tích hợp thời tiết AccuWeather để lấy dữ liệu thời tiết cho vị trí của bạn. Nhập tên thành phố hoặc địa điểm cần theo dõi thời tiết.",
+        "data": {
+          "location": "Địa điểm (VD: Quận 1)"
+        },
+        "data_description": {
+          "location": "Nhập tên thành phố, quận/huyện"
+        }
+      },
+      "select_location": {
+        "title": "Chọn Địa điểm Chính xác",
+        "description": "Đã tìm thấy các địa điểm phù hợp. Vui lòng chọn địa điểm chính xác từ danh sách dưới đây:",
+        "data": {
+          "location_choice": "Chọn địa điểm"
+        },
+        "data_description": {
+          "location_choice": "Chọn địa điểm phù hợp nhất với vị trí của bạn"
+        }
+      },
+      "configure_options": {
+        "title": "Cấu hình Tùy chọn Cập nhật",
+        "description": "Thiết lập tần suất cập nhật dữ liệu thời tiết. Khoảng thời gian ngắn hơn sẽ cập nhật nhanh hơn nhưng tiêu tốn nhiều tài nguyên hơn.",
+        "data": {
+          "update_interval": "Khoảng thời gian cập nhật (giây)"
+        },
+        "data_description": {
+          "update_interval": "Chọn từ 300-3600 giây (5-60 phút). Khuyến nghị: 300-600 giây (5-10 phút)"
+        }
+      },
+      "update_interval": {
+        "title": "Cấu hình Thời gian Cập nhật",
+        "description": "Chọn khoảng thời gian giữa các lần cập nhật dữ liệu thời tiết từ AccuWeather. Thời gian ngắn = cập nhật nhanh nhưng tốn tài nguyên.",
+        "data": {
+          "update_interval": "Khoảng thời gian cập nhật (giây)"
+        },
+        "data_description": {
+          "update_interval": "Từ {min_interval} đến {max_interval} giây (mặc định: {default_interval} giây)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Không thể kết nối tới AccuWeather. Vui lòng kiểm tra kết nối internet.",
+      "invalid_location": "Địa điểm không hợp lệ hoặc không được AccuWeather hỗ trợ.",
+      "no_locations_found": "Không tìm thấy địa điểm nào cho từ khóa tìm kiếm. Thử nhập tên khác.",
+      "timeout": "Hết thời gian kết nối tới AccuWeather. Thử lại sau.",
+      "unknown": "Đã xảy ra lỗi không mong muốn. Vui lòng thử lại."
+    },
+    "abort": {
+      "already_configured": "Địa điểm này đã được cấu hình. Không thể thêm trùng lặp."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Cập nhật Cài đặt AccuWeather",
+        "description": "Thay đổi cài đặt cho tích hợp AccuWeather. Bạn có thể điều chỉnh tần suất cập nhật dữ liệu thời tiết.",
+        "data": {
+          "update_interval": "Khoảng thời gian cập nhật (giây)"
+        },
+        "data_description": {
+          "update_interval": "Thời gian giữa các lần cập nhật dữ liệu (300-3600 giây)"
+        }
+      }
+    }
+  }
+}
