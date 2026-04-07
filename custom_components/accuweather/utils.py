@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
+import unicodedata
 from typing import Any
 
 import aiohttp
@@ -13,15 +15,132 @@ from .const import AUTOCOMPLETE_URL, BASE_URL, CONDITION_MAP, CONDITION_MAP_VI
 
 _LOGGER = logging.getLogger(__name__)
 
+# Retry settings for transient HTTP errors (403, 429, 500, 502, 503, 504)
+RETRY_HTTP_ERRORS = {403, 429, 500, 502, 503, 504}
+RETRY_COUNT = 5
+INITIAL_RETRY_DELAY = 1.0   # seconds (starting delay for exponential backoff)
+MAX_RETRY_DELAY = 30.0     # seconds (cap for exponential backoff)
 
-def get_headers() -> dict[str, str]:
+# Timeout settings (seconds)
+CONNECT_TIMEOUT = 15
+READ_TIMEOUT = 20
+
+
+def slugify(text: str) -> str:
+    """Convert Vietnamese location name to URL slug.
+
+    e.g. "Hải Dương" -> "hai-duong", "Thành phố Hồ Chí Minh" -> "thanh-pho-ho-chi-minh"
+    """
+    # NFD decomposition then strip combining characters (accents)
+    nfkd = unicodedata.normalize('NFD', text)
+    stripped = ''.join(c for c in nfkd if not unicodedata.combining(c))
+    # Lowercase, replace spaces with hyphens, remove anything that's not a-z/0-9/-
+    slug = stripped.lower()
+    slug = slug.replace(' ', '-')
+    slug = re.sub(r'[^a-z0-9-]', '', slug)
+    slug = re.sub(r'-+', '-', slug)
+    slug = slug.strip('-')
+    return slug
+
+
+def get_headers(referer: str | None = None) -> dict[str, str]:
     """Get default headers for requests."""
-    return {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://www.accuweather.com/",
-        "Accept-Language": "vi,en-US;q=0.9,en;q=0.8"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,image/apng,*/*;q=0.8"
+        ),
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+        "DNT": "1",
     }
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
+async def _fetch_with_retry(
+    session: aiohttp.ClientSession,
+    url: str,
+    headers: dict[str, str],
+) -> str | None:
+    """Fetch a URL with retry on transient HTTP errors and connection errors.
+
+    Body is read inside the async-with block to ensure the connection stays alive
+    while reading. Returns the HTML text on success, None on failure.
+    """
+    for attempt in range(1, RETRY_COUNT + 1):
+        try:
+            client_timeout = aiohttp.ClientTimeout(
+                total=None,
+                connect=CONNECT_TIMEOUT,
+                sock_read=READ_TIMEOUT,
+                sock_connect=CONNECT_TIMEOUT,
+            )
+            async with session.get(
+                url, headers=headers, timeout=client_timeout
+            ) as response:
+                if response.status == 200:
+                    return await response.text()
+                if response.status in RETRY_HTTP_ERRORS:
+                    delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+                    _LOGGER.debug(
+                        "HTTP %d for %s (attempt %d/%d), retrying in %.1fs...",
+                        response.status, url, attempt, RETRY_COUNT, delay,
+                    )
+                    if attempt < RETRY_COUNT:
+                        await asyncio.sleep(delay)
+                    continue
+                _LOGGER.debug(
+                    "HTTP %d for %s (attempt %d/%d), not retrying",
+                    response.status, url, attempt, RETRY_COUNT,
+                )
+                return None
+        except asyncio.TimeoutError:
+            delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+            _LOGGER.debug(
+                "Timeout for %s (attempt %d/%d), retrying in %.1fs...",
+                url, attempt, RETRY_COUNT, delay,
+            )
+            if attempt < RETRY_COUNT:
+                await asyncio.sleep(delay)
+        except aiohttp.ClientConnectionError as e:
+            delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+            _LOGGER.debug(
+                "ClientConnectionError for %s (attempt %d/%d): %s, retrying in %.1fs...",
+                url, attempt, RETRY_COUNT, e, delay,
+            )
+            if attempt < RETRY_COUNT:
+                await asyncio.sleep(delay)
+        except aiohttp.ClientConnectorError as e:
+            delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+            _LOGGER.debug(
+                "ClientConnectorError for %s (attempt %d/%d): %s, retrying in %.1fs...",
+                url, attempt, RETRY_COUNT, e, delay,
+            )
+            if attempt < RETRY_COUNT:
+                await asyncio.sleep(delay)
+        except Exception as e:
+            delay = min(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+            _LOGGER.debug(
+                "Exception for %s (attempt %d/%d): %s: %s, retrying in %.1fs...",
+                url, attempt, RETRY_COUNT, type(e).__name__, e, delay,
+            )
+            if attempt < RETRY_COUNT:
+                await asyncio.sleep(delay)
+    _LOGGER.debug("All %d attempts failed for %s", RETRY_COUNT, url)
+    return None
 
 
 async def get_location_keys(session: aiohttp.ClientSession, query: str) -> list[tuple[str, str, str]]:
@@ -47,12 +166,12 @@ async def get_location_keys(session: aiohttp.ClientSession, query: str) -> list[
                             results.append((key, name, long_name))
                     return results
     except Exception as e:
-        _LOGGER.error("Error getting location keys: %s", e)
+        _LOGGER.debug("get_location_keys: %s: %s", type(e).__name__, e)
     
     return []
 
 
-def extract_numeric_value(text: str) -> float | None:
+def extract_numeric_value(text: str | None) -> float | None:
     """Extract numeric value from text."""
     if not text:
         return None
@@ -103,7 +222,7 @@ def convert_temp_to_numeric(temp_text: str) -> float | None:
     return None
 
 
-def map_condition_to_ha(condition: str) -> str:
+def map_condition_to_ha(condition: str | None) -> str:
     """Map AccuWeather condition to Home Assistant condition."""
     if not condition:
         return "unknown"
@@ -139,6 +258,11 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
         soup = BeautifulSoup(html, 'html.parser')
         card = soup.select_one('.current-weather-card')
         if not card:
+            _LOGGER.debug(
+                "parse_weather_html: .current-weather-card NOT found "
+                "(HTML structure may have changed). First 100 chars: %s",
+                html[:100]
+            )
             return None
         
         # Time
@@ -173,6 +297,11 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
             if label and value:
                 details[label.text.strip()] = value.text.strip()
         
+        _LOGGER.debug(
+            "parse_weather_html: temp=%s phrase='%s' condition=%s",
+            temp_numeric, phrase_val, condition
+        )
+        
         return {
             'time': time_val,
             'temperature': temp_numeric,
@@ -191,24 +320,30 @@ async def parse_weather_html(html: str) -> dict[str, Any] | None:
             'details': details
         }
     except Exception as e:
-        _LOGGER.error("Error parsing weather HTML: %s", e)
+        _LOGGER.debug("parse_weather_html: %s: %s", type(e).__name__, e)
         return None
 
 
-async def get_current_weather(session: aiohttp.ClientSession, location_key: str) -> dict[str, Any] | None:
+async def get_current_weather(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> dict[str, Any] | None:
     """Get current weather data (converted from get_weather.py)."""
-    url = f"{BASE_URL}/vi/vn/any/{location_key}/current-weather/{location_key}"
+    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/current-weather/{location_key}"
     headers = get_headers()
-    
+
+    html = await _fetch_with_retry(session, url, headers)
+    if html is None:
+        return None
+
     try:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                html = await response.text()
-                return await parse_weather_html(html)
+        data = await parse_weather_html(html)
+        if data is None:
+            _LOGGER.debug(
+                "get_current_weather: parse returned None (HTML structure changed?). URL: %s",
+                url,
+            )
+        return data
     except Exception as e:
-        _LOGGER.error("Error getting current weather: %s", e)
-    
-    return None
+        _LOGGER.debug("get_current_weather: %s: %s - %s", type(e).__name__, e, url)
+        return None
 
 
 async def parse_daily_html(html: str) -> list[dict[str, Any]]:
@@ -261,7 +396,7 @@ async def parse_daily_html(html: str) -> list[dict[str, Any]]:
             details = {}
             for panel in content.select('.panels .left, .panels .right'):
                 for p in panel.select('p.panel-item'):
-                    label = p.contents[0].strip() if p.contents else None
+                    label = str(p.contents[0]).strip() if p.contents else None
                     value = p.select_one('.value')
                     if label and value:
                         details[label] = value.text.strip()
@@ -283,24 +418,28 @@ async def parse_daily_html(html: str) -> list[dict[str, Any]]:
             })
         return daily
     except Exception as e:
-        _LOGGER.error("Error parsing daily HTML: %s", e)
+        _LOGGER.debug("parse_daily_html: %s: %s", type(e).__name__, e)
         return []
 
 
-async def get_daily_forecast(session: aiohttp.ClientSession, location_key: str) -> list[dict[str, Any]]:
+async def get_daily_forecast(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> list[dict[str, Any]]:
     """Get daily forecast data (converted from get_daily.py)."""
-    url = f"{BASE_URL}/vi/vn/any/{location_key}/daily-weather-forecast/{location_key}"
+    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/daily-weather-forecast/{location_key}"
     headers = get_headers()
-    
+
+    html = await _fetch_with_retry(session, url, headers)
+    if html is None:
+        return []
+
     try:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                html = await response.text()
-                return await parse_daily_html(html)
+        data = await parse_daily_html(html)
+        _LOGGER.debug(
+            "get_daily_forecast: parsed %d days from %s", len(data), url
+        )
+        return data
     except Exception as e:
-        _LOGGER.error("Error getting daily forecast: %s", e)
-    
-    return []
+        _LOGGER.debug("get_daily_forecast: %s: %s - %s", type(e).__name__, e, url)
+        return []
 
 
 async def parse_hourly_html(html: str) -> list[dict[str, Any]]:
@@ -319,7 +458,7 @@ async def parse_hourly_html(html: str) -> list[dict[str, Any]]:
             details = {}
             for panel in item.select('.panel'):
                 for p in panel.select('p'):
-                    label = p.contents[0].strip() if p.contents else None
+                    label = str(p.contents[0]).strip() if p.contents else None
                     value = p.select_one('.value')
                     if label and value:
                         details[label] = value.text.strip()
@@ -327,7 +466,7 @@ async def parse_hourly_html(html: str) -> list[dict[str, Any]]:
             # Also collect from all .hourly-content-container .panel blocks
             for content in item.select('.hourly-content-container .panel'):
                 for p in content.select('p'):
-                    label = p.contents[0].strip() if p.contents else None
+                    label = str(p.contents[0]).strip() if p.contents else None
                     value = p.select_one('.value')
                     if label and value:
                         details[label] = value.text.strip()
@@ -352,24 +491,28 @@ async def parse_hourly_html(html: str) -> list[dict[str, Any]]:
             })
         return hourly
     except Exception as e:
-        _LOGGER.error("Error parsing hourly HTML: %s", e)
+        _LOGGER.debug("parse_hourly_html: %s: %s", type(e).__name__, e)
         return []
 
 
-async def get_hourly_forecast(session: aiohttp.ClientSession, location_key: str) -> list[dict[str, Any]]:
+async def get_hourly_forecast(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> list[dict[str, Any]]:
     """Get hourly forecast data (converted from get_hourly.py)."""
-    url = f"{BASE_URL}/vi/vn/any/{location_key}/hourly-weather-forecast/{location_key}"
+    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/hourly-weather-forecast/{location_key}"
     headers = get_headers()
-    
+
+    html = await _fetch_with_retry(session, url, headers)
+    if html is None:
+        return []
+
     try:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                html = await response.text()
-                return await parse_hourly_html(html)
+        data = await parse_hourly_html(html)
+        _LOGGER.debug(
+            "get_hourly_forecast: parsed %d hours from %s", len(data), url
+        )
+        return data
     except Exception as e:
-        _LOGGER.error("Error getting hourly forecast: %s", e)
-    
-    return []
+        _LOGGER.debug("get_hourly_forecast: %s: %s - %s", type(e).__name__, e, url)
+        return []
 
 
 async def parse_air_html(html: str) -> dict[str, Any]:
@@ -382,7 +525,7 @@ async def parse_air_html(html: str) -> dict[str, Any]:
         pollutants = {}
         for pol in soup.select('.air-quality-pollutant'):
             qa = pol.get('data-qa', '')
-            name = qa.replace('airQualityPollutant', '') if qa else None
+            name = str(qa).replace('airQualityPollutant', '') if qa else None
             aqi = None
             value = None
             unit = None
@@ -406,152 +549,175 @@ async def parse_air_html(html: str) -> dict[str, Any]:
             'pollutants': pollutants
         }
     except Exception as e:
-        _LOGGER.error("Error parsing air quality HTML: %s", e)
+        _LOGGER.debug("parse_air_html: %s: %s", type(e).__name__, e)
         return {'category': None, 'description': None, 'pollutants': {}}
 
 
-async def get_air_quality(session: aiohttp.ClientSession, location_key: str) -> dict[str, Any]:
+async def get_air_quality(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> dict[str, Any]:
     """Get air quality data (converted from get_air.py)."""
-    url = f"{BASE_URL}/vi/vn/any/{location_key}/air-quality-index/{location_key}"
+    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/air-quality-index/{location_key}"
     headers = get_headers()
-    
+
+    html = await _fetch_with_retry(session, url, headers)
+    if html is None:
+        return {"category": None, "description": None, "pollutants": {}}
+
     try:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                html = await response.text()
-                return await parse_air_html(html)
+        data = await parse_air_html(html)
+        pollutant_count = len(data.get("pollutants", {}))
+        _LOGGER.debug(
+            "get_air_quality: parsed %d pollutants from %s", pollutant_count, url
+        )
+        return data
     except Exception as e:
-        _LOGGER.error("Error getting air quality: %s", e)
-    
-    return {'category': None, 'description': None, 'pollutants': {}}
+        _LOGGER.debug("get_air_quality: %s: %s - %s", type(e).__name__, e, url)
+        return {"category": None, "description": None, "pollutants": {}}
 
 
-async def parse_health_html(html: str) -> list[dict[str, Any]]:
-    """Parse health activities HTML (converted from get_all_health.py)."""
+async def parse_health_html(html: str, group_slug: str = '') -> list[dict[str, Any]]:
+    """Parse health activities HTML.
+
+    The page contains MULTIPLE 'indexListData' JavaScript variables, one per
+    section (allergy health, outdoor, travel, home garden, pests, allergy other).
+    We extract ALL of them and merge the results.
+
+    The old HTML-link approach was WRONG - link text only shows activity name
+    without the status, and the adjacent category text belongs to the PREVIOUS
+    activity in the list.
+    """
     try:
-        # Extract JavaScript data
-        m = re.search(r"var indexListData\s*=\s*(\[.*?\]);", html, re.DOTALL)
-        if not m:
-            return []
-        
-        import json
-        data = json.loads(m.group(1))
-        result = []
-        for item in data:
-            result.append({
-                'name': item.get('name'),
-                'localizedName': item.get('localizedName'),
-                'value': item.get('value'),
-                'category': item.get('category'),
-                'localizedCategory': item.get('localizedCategory'),
-                'categoryPhrase': item.get('categoryPhrase'),
-                'categoryValue': item.get('categoryValue'),
-                'statusColor': item.get('statusColor'),
-                'type': item.get('type'),
-                'slug': item.get('slug'),
-                'indexDate': item.get('indexDate'),
-                'lifestyleCategory': item.get('lifestyleCategory')
-            })
+        result: list[dict[str, Any]] = []
+
+        # Find ALL indexListData instances in the page
+        index_list_matches = re.findall(
+            r'var indexListData\s*=\s*(\[.*?\]);', html, re.DOTALL
+        )
+
+        if not index_list_matches:
+            _LOGGER.debug(
+                'parse_health_html: no indexListData found, returning empty list'
+            )
+            return result
+
+        for json_str in index_list_matches:
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                _LOGGER.debug(
+                    'parse_health_html: failed to decode indexListData JSON, skipping'
+                )
+                continue
+
+            for item in data:
+                result.append({
+                    'name': item.get('name'),
+                    'localizedName': item.get('localizedName'),
+                    'value': item.get('value'),
+                    'category': item.get('category'),
+                    'localizedCategory': item.get('localizedCategory'),
+                    'categoryPhrase': item.get('categoryPhrase'),
+                    'categoryValue': item.get('categoryValue'),
+                    'statusColor': item.get('statusColor'),
+                    'type': item.get('type'),
+                    'slug': item.get('slug'),
+                    'indexDate': item.get('indexDate'),
+                    'lifestyleCategory': item.get('lifestyleCategory'),
+                    'categoryGroup': group_slug,
+                })
+
+        _LOGGER.debug(
+            'parse_health_html: parsed %d health activities from %d sections',
+            len(result), len(index_list_matches)
+        )
         return result
+
     except Exception as e:
-        _LOGGER.error("Error parsing health HTML: %s", e)
+        _LOGGER.debug('parse_health_html: %s: %s', type(e).__name__, e)
         return []
 
 
-def group_health_activities(items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Group health activities by category (converted from run_weather.py)."""
-    groups = {
+async def crawl_all_health_activities(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> dict[str, list[dict[str, Any]]]:
+    """Crawl all health activities by category (converted from get_all_health.py).
+
+    AccuWeather redesigned the site - all activities are listed on the main
+    health-activities page. We crawl that page directly and do NOT fall back
+    to individual category subpages (they return 404).
+    """
+    headers = get_headers()
+
+    groups: dict[str, list[dict[str, Any]]] = {
         'allergy_health': [],
         'outdoor': [],
         'travel': [],
         'home_garden': [],
         'pests': [],
+        'entertainment': [],
         'allergy_other': [],
-        'entertainment': [],
         'other': []
     }
-    
-    for item in items:
-        slug = (item.get('slug') or '').lower()
-        cat = item.get('lifestyleCategory')
-        t = item.get('type')
-        
-        if cat == 1 or slug in ['asthma','flu','sinus','migraine','arthritis','common-cold'] or t in [21, 23, 25, 26, 27, 30, 18]:
-            groups['allergy_health'].append(item)
-        elif cat == 2 or slug in ['running','hiking','biking','golf','sun-sand','astronomy','fishing']:
-            groups['outdoor'].append(item)
-        elif cat == 3 or slug in ['driving','air-travel']:
-            groups['travel'].append(item)
-        elif cat == 4 or slug in ['lawn-mowing','composting']:
-            groups['home_garden'].append(item)
-        elif cat == 5 or 'pest' in slug or 'mosquito' in slug:
-            groups['pests'].append(item)
-        elif slug in ['dust-dander','pollen']:
-            groups['allergy_other'].append(item)
-        elif slug in ['outdoor-entertaining','entertainment']:
-            groups['entertainment'].append(item)
-        else:
-            groups['other'].append(item)
-    
-    return groups
 
-
-async def crawl_all_health_activities(session: aiohttp.ClientSession, location_key: str) -> dict[str, list[dict[str, Any]]]:
-    """Crawl all health activities by category (converted from get_all_health.py)."""
-    group_slugs = [
-        'allergies', 'outdoor', 'travel', 'home-garden', 'pests', 'entertainment'
-    ]
-    
     slug_to_group = {
-        'allergies': 'allergy_health',
-        'outdoor': 'outdoor',
-        'travel': 'travel',
-        'home-garden': 'home_garden',
-        'pests': 'pests',
-        'entertainment': 'entertainment',
+        'asthma': 'allergy_health', 'arthritis': 'allergy_health',
+        'cold-flu': 'allergy_health', 'common-cold': 'allergy_health',
+        'flu': 'allergy_health', 'migraine': 'allergy_health',
+        'sinus': 'allergy_health',
+        'running': 'outdoor', 'hiking': 'outdoor', 'biking': 'outdoor',
+        'golf': 'outdoor', 'sun-sand': 'outdoor', 'fishing': 'outdoor',
+        'astronomy': 'outdoor',
+        'air-travel': 'travel', 'driving': 'travel',
+        'lawn-mowing': 'home_garden', 'composting': 'home_garden',
+        'mosquito-activity': 'pests', 'pest': 'pests',
+        'indoor-pests': 'pests', 'outdoor-pests': 'pests',
+        'outdoor-entertaining': 'entertainment',
+        'dust-dander': 'allergy_other', 'pollen': 'allergy_other',
+        'tree-pollen': 'allergy_other', 'grass-pollen': 'allergy_other',
+        'ragweed-pollen': 'allergy_other',
     }
-    
-    groups = {
-        'allergy_health': [],
-        'outdoor': [],
-        'travel': [],
-        'home_garden': [],
-        'pests': [],
-        'entertainment': [],
-        'other': []
-    }
-    
-    headers = get_headers()
-    
-    for slug in group_slugs:
-        try:
-            url = f"{BASE_URL}/vi/vn/any/{location_key}/{slug}-weather/{location_key}"
-            async with session.get(url, headers=headers, timeout=10) as response:
-                if response.status == 200:
-                    html = await response.text()
-                    data = await parse_health_html(html)
-                    group_name = slug_to_group.get(slug, 'other')
-                    groups[group_name].extend(data)
-        except Exception as e:
-            _LOGGER.error("Error crawling health data for %s: %s", slug, e)
-    
+
+    # Chỉ crawl trang health-activities chính, KHÔNG crawl subpages (404)
+    try:
+        main_url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/health-activities/{location_key}"
+        html = await _fetch_with_retry(session, main_url, headers)
+        if html:
+            activities = await parse_health_html(html, 'health')
+
+            for activity in activities:
+                slug = activity.get('slug', '')
+                group = slug_to_group.get(slug, 'other')
+                if group in groups:
+                    groups[group].append(activity)
+
+            _LOGGER.debug(
+                "Health activities from main page: %d total across %d groups",
+                len(activities), sum(1 for g in groups.values() if g)
+            )
+    except Exception as e:
+        _LOGGER.debug("crawl_all: main page exception: %s: %s", type(e).__name__, e)
+
+    total = sum(len(g) for g in groups.values())
+    _LOGGER.debug("Health activities total: %d", total)
     return groups
 
 
-async def get_minutecast_data(session: aiohttp.ClientSession, location_key: str) -> dict[str, Any] | None:
+async def get_minutecast_data(session: aiohttp.ClientSession, location_key: str, location_slug: str) -> dict[str, Any] | None:
     """Get MinuteCast data (minute-by-minute precipitation forecast)."""
-    url = f"{BASE_URL}/vi/vn/any/{location_key}/minute-weather-forecast/{location_key}"
+    url = f"{BASE_URL}/vi/vn/{location_slug}/{location_key}/minute-weather-forecast/{location_key}"
     headers = get_headers()
-    
+
+    html = await _fetch_with_retry(session, url, headers)
+    if html is None:
+        return None
+
     try:
-        async with session.get(url, headers=headers) as response:
-            if response.status == 200:
-                html = await response.text()
-                return await parse_minutecast_html(html)
+        data = await parse_minutecast_html(html)
+        _LOGGER.debug(
+            "get_minutecast_data: summary='%s' from %s",
+            data.get("summary", "")[:50], url
+        )
+        return data
     except Exception as e:
-        _LOGGER.error("Error getting MinuteCast data: %s", e)
-    
-    return None
+        _LOGGER.debug("get_minutecast_data: %s: %s - %s", type(e).__name__, e, url)
+        return None
 
 
 async def parse_minutecast_html(html: str) -> dict[str, Any]:
@@ -660,7 +826,7 @@ async def parse_minutecast_html(html: str) -> dict[str, Any]:
         }
         
     except Exception as e:
-        _LOGGER.error("Error parsing MinuteCast HTML: %s", e)
+        _LOGGER.debug("parse_minutecast_html: %s: %s", type(e).__name__, e)
         return {
             'summary': 'Lỗi phân tích dữ liệu MinuteCast',
             'current_temperature': None,

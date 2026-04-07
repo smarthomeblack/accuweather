@@ -29,12 +29,28 @@ from .device import get_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
+# Mapping from sensor key to API pollutant key
+_POLUTANT_KEY_MAP: dict[str, str] = {
+    "pm25": "PM2_5",
+    "pm10": "PM10",
+    "ozone": "O3",
+    "nitrogen_dioxide": "NO2",
+    "sulfur_dioxide": "SO2",
+    "carbon_monoxide": "CO"
+}
 
 SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
     # Basic weather sensors
     SensorEntityDescription(
         key="realfeel_temperature",
         name="RealFeel Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+    ),
+    SensorEntityDescription(
+        key="realfeel_shade_temperature",
+        name="RealFeel Shade Temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
@@ -89,6 +105,7 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         key="uv_index",
         name="UV Index",
         state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="UV index",
     ),
     SensorEntityDescription(
         key="dew_point",
@@ -138,7 +155,7 @@ SENSOR_TYPES: tuple[SensorEntityDescription, ...] = (
         name="Carbon Monoxide",
         device_class=SensorDeviceClass.CO,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="ppm",
+        native_unit_of_measurement="µg/m³",
     ),
     SensorEntityDescription(
         key="cloud_ceiling",
@@ -171,6 +188,7 @@ async def async_setup_entry(
         entities.append(AccuWeatherSensorEntity(coordinator, description))
     
     # Add dynamic health activity sensors
+    health_count = 0
     if coordinator.data and "health_activities" in coordinator.data:
         health_data = coordinator.data["health_activities"]
         
@@ -186,7 +204,9 @@ async def async_setup_entry(
                         icon=get_health_icon(activity_slug),
                     )
                     entities.append(AccuWeatherHealthSensorEntity(coordinator, health_desc, activity))
+                    health_count += 1
     
+    _LOGGER.info("AccuWeather: Created %d health activity sensors", health_count)
     async_add_entities(entities, False)
 
 
@@ -255,6 +275,14 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
                         return float(match.group(1))
                 return current.get("temperature")
                 
+            elif key == "realfeel_shade_temperature":
+                realfeel_shade = current.get("realfeel_shade")
+                if realfeel_shade:
+                    match = re.search(r"(-?\d+)", str(realfeel_shade))
+                    if match:
+                        return float(match.group(1))
+                return None
+                
             elif key == "humidity":
                 return current.get("humidity")
             elif key == "pressure":
@@ -305,32 +333,23 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
             
             # Individual pollutants
             pollutants = air_data.get("pollutants", {})
-            pollutant_map = {
-                "pm25": "PM2_5",
-                "pm10": "PM10",
-                "ozone": "O3",
-                "nitrogen_dioxide": "NO2",
-                "sulfur_dioxide": "SO2",
-                "carbon_monoxide": "CO"
-            }
             
-            if key in pollutant_map and pollutant_map[key] in pollutants:
-                pollutant_data = pollutants[pollutant_map[key]]
+            if key in _POLUTANT_KEY_MAP and _POLUTANT_KEY_MAP[key] in pollutants:
+                pollutant_data = pollutants[_POLUTANT_KEY_MAP[key]]
                 value = pollutant_data.get("value")
                 if value:
                     try:
                         float_value = float(value)
-                        # Convert CO from µg/m³ to ppm for HA compatibility
-                        if key == "carbon_monoxide":
-                            return round(float_value * 0.00087, 2)  # µg/m³ to ppm conversion for CO
                         return float_value
                     except (ValueError, TypeError):
                         return None
         
         # MinuteCast sensor
-        if key == "minutecast" and "minutecast" in self.coordinator.data:
-            minutecast_data = self.coordinator.data["minutecast"]
-            return minutecast_data.get("summary", "Không có dữ liệu MinuteCast")
+        if key == "minutecast":
+            minutecast = self.coordinator.data.get("minutecast")
+            if minutecast is not None:
+                return minutecast.get("summary", "Không có dữ liệu MinuteCast")
+            return "Không có dữ liệu MinuteCast"
         
         return None
 
@@ -350,7 +369,9 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
             attrs["last_update"] = current.get("time")
         
         # Add air quality details
-        if "air_quality" in self.coordinator.data and self.entity_description.key.startswith(("pm25", "pm10", "ozone", "nitrogen", "sulfur", "carbon")):
+        if "air_quality" in self.coordinator.data and \
+                self.entity_description.key.startswith(
+                    ("pm25", "pm10", "ozone", "nitrogen", "sulfur", "carbon")):
             air_data = self.coordinator.data["air_quality"]
             attrs.update({
                 "description": air_data.get("desc"),
@@ -359,37 +380,25 @@ class AccuWeatherSensorEntity(CoordinatorEntity[AccuWeatherDataUpdateCoordinator
             
             # Add specific pollutant details
             pollutants = air_data.get("pollutants", {})
-            pollutant_map = {
-                "pm25": "PM2_5",
-                "pm10": "PM10",
-                "ozone": "O3",
-                "nitrogen_dioxide": "NO2",
-                "sulfur_dioxide": "SO2",
-                "carbon_monoxide": "CO"
-            }
-            
-            if self.entity_description.key in pollutant_map and pollutant_map[self.entity_description.key] in pollutants:
-                pollutant_data = pollutants[pollutant_map[self.entity_description.key]]
+            key = self.entity_description.key
+            if key in _POLUTANT_KEY_MAP and _POLUTANT_KEY_MAP[key] in pollutants:
+                pollutant_data = pollutants[_POLUTANT_KEY_MAP[key]]
                 attrs.update({
                     "aqi": pollutant_data.get("aqi"),
                     "unit": pollutant_data.get("unit"),
                 })
-                
-                # For CO, add original unit info since we converted it
-                if self.entity_description.key == "carbon_monoxide":
-                    attrs["original_unit"] = pollutant_data.get("unit", "µg/m³")
-                    attrs["original_value"] = pollutant_data.get("value")
         
         # Add MinuteCast details
-        if self.entity_description.key == "minutecast" and "minutecast" in self.coordinator.data:
-            minutecast_data = self.coordinator.data["minutecast"]
-            attrs.update({
-                "current_temperature": minutecast_data.get("current_temperature"),
-                "current_condition": minutecast_data.get("current_condition"),
-                "realfeel": minutecast_data.get("realfeel"),
-                "current_time": minutecast_data.get("current_time"),
-                "forecast_type": minutecast_data.get("forecast_type"),
-            })
+        if self.entity_description.key == "minutecast":
+            minutecast = self.coordinator.data.get("minutecast")
+            if minutecast is not None:
+                attrs.update({
+                    "current_temperature": minutecast.get("current_temperature"),
+                    "current_condition": minutecast.get("current_condition"),
+                    "realfeel": minutecast.get("realfeel"),
+                    "current_time": minutecast.get("current_time"),
+                    "forecast_type": minutecast.get("forecast_type"),
+                })
         
         return attrs
 
