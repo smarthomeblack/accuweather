@@ -31,6 +31,7 @@ __pycache__/
 # IDE files
 .vscode/
 .idea/
+.mypy_cache/
 
 # Tool files
 .grapuco/
